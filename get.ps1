@@ -4,7 +4,8 @@
 #   irm https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.ps1 | iex
 #
 # Environment overrides:
-#   OPEN_LEDGER_LICENSE         license key (classic GitHub PAT with read:packages)
+#   OPEN_LEDGER_LICENSE         license key (GitHub PAT; classic with 'read:packages',
+#                                or fine-grained with Account -> Packages: Read)
 #   OPEN_LEDGER_LICENSE_FILE    path to a file containing the license key
 #   OPEN_LEDGER_CHANNEL         release channel (default: stable)
 #   OPEN_LEDGER_DIR             install directory (default: $HOME\open_ledger)
@@ -54,8 +55,10 @@ if ($LASTEXITCODE -ne 0) {
 Registry login failed.
 Common causes:
   - the license key is mistyped or expired
-  - the token is a fine-grained PAT (GHCR requires a classic PAT)
-  - the token is missing the 'read:packages' scope
+  - the token is missing GHCR read permission. Either:
+      * Classic PAT: enable the 'read:packages' scope, or
+      * Fine-grained PAT: under 'Account permissions' (not
+        'Repository permissions'), enable 'Packages: Read'.
 See the docker output above for the exact reason.
 "@
 }
@@ -65,7 +68,19 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Info "Pulling the installer image ..."
 # No output suppression: docker pull's progress is the only feedback on a slow link.
 docker pull "${InstallerImage}:${Channel}"
-if ($LASTEXITCODE -ne 0) { Fail "Failed to pull the installer image." }
+if ($LASTEXITCODE -ne 0) {
+    Fail @"
+Could not pull ${InstallerImage}:${Channel}.
+The login above succeeded, but the registry refused the pull.
+'docker login' validates only that the token is well-formed - it does not
+check whether the token can read packages. The token you used is almost
+certainly missing GHCR read permission:
+  - Classic PAT: enable the 'read:packages' scope.
+  - Fine-grained PAT: under 'Account permissions' (not 'Repository
+    permissions'), enable 'Packages: Read'.
+Regenerate the token with the right permission and re-run.
+"@
+}
 Info "Starting the guided installer ..."
 # Set the key in this process's environment and pass `-e OPEN_LEDGER_LICENSE`
 # by name only, so the value is never part of the docker argv.

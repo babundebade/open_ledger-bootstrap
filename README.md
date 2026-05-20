@@ -25,9 +25,12 @@ You will need:
   - macOS — <https://www.docker.com/products/docker-desktop/>
   - Windows — <https://www.docker.com/products/docker-desktop/>
   - Or Podman — <https://podman.io/docs/installation>
-- **An Open Ledger license key** — a *classic* GitHub Personal Access Token
-  with the `read:packages` scope, issued to you by the project author.
-  (Fine-grained PATs do not work with `ghcr.io` and will be rejected.)
+- **An Open Ledger license key** — a GitHub Personal Access Token with
+  permission to read packages, issued to you by the project author. Either:
+  - a *classic* PAT with the **`read:packages`** scope, **or**
+  - a *fine-grained* PAT with **Account permissions → Packages: Read**
+    (not under Repository permissions — that's a common mistake that lets
+    `docker login` succeed but causes the pull to fail with `denied`).
 
 ### Linux / macOS
 
@@ -130,13 +133,18 @@ Start your container engine and re-run the one-liner.
 - Linux: `sudo systemctl start docker` (or `start podman`)
 - macOS / Windows: open Docker Desktop from the Applications / Start menu
 
-**`Registry login failed.`**
-Your license key was rejected by `ghcr.io`. Common causes:
-- mistyped or expired key
-- the token is a *fine-grained* PAT (GHCR requires a *classic* PAT)
-- the token is missing the `read:packages` scope
+**`Registry login failed.`** *or* **`Could not pull … denied`**
+Your license key was rejected by `ghcr.io`. Note that `docker login` only
+validates the token is well-formed — it does *not* check whether the token
+can read packages, so a token with the wrong permission will pass login and
+then fail on `docker pull` with `denied`. Either symptom means the token is
+missing GHCR read permission:
+- **Classic PAT** — enable the **`read:packages`** scope.
+- **Fine-grained PAT** — under **Account permissions** (not Repository
+  permissions), enable **Packages: Read**.
 
-Contact the project author for a new key if needed.
+Mistyped or expired keys produce the same error; regenerate if in doubt, or
+contact the project author for a new key.
 
 **`The application did not become healthy after the update.`**
 First boot on slow hardware (e.g. a Raspberry Pi) can exceed the 90-second

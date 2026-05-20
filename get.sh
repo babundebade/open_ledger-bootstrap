@@ -9,7 +9,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.sh | bash -s -- --uninstall
 #
 # Environment overrides:
-#   OPEN_LEDGER_LICENSE         license key (classic GitHub PAT with read:packages)
+#   OPEN_LEDGER_LICENSE         license key (GitHub PAT; classic with 'read:packages',
+#                                or fine-grained with Account → Packages: Read)
 #   OPEN_LEDGER_LICENSE_FILE    path to a file containing the license key
 #   OPEN_LEDGER_CHANNEL         release channel (default: stable)
 #   OPEN_LEDGER_DIR             install directory (default: $HOME/open_ledger)
@@ -148,8 +149,10 @@ main() {
     err "Registry login failed.
        Common causes:
          - the license key is mistyped or expired
-         - the token is a fine-grained PAT (GHCR requires a classic PAT)
-         - the token is missing the 'read:packages' scope
+         - the token is missing GHCR read permission. Either:
+             * Classic PAT: enable the 'read:packages' scope, or
+             * Fine-grained PAT: under 'Account permissions' (not
+               'Repository permissions'), enable 'Packages: Read'.
        See the engine output above for the exact reason."
   fi
 
@@ -162,7 +165,17 @@ main() {
   info "Pulling the installer image ..."
   # No output suppression: docker pull's progress bar is the only feedback
   # during what can be a multi-hundred-MB download on a slow link.
-  "$engine" pull "${INSTALLER_IMAGE}:${CHANNEL}"
+  if ! "$engine" pull "${INSTALLER_IMAGE}:${CHANNEL}"; then
+    err "Could not pull ${INSTALLER_IMAGE}:${CHANNEL}.
+       The login above succeeded, but the registry refused the pull.
+       'docker login' validates only that the token is well-formed — it does
+       not check whether the token can read packages. The token you used is
+       almost certainly missing GHCR read permission:
+         - Classic PAT: enable the 'read:packages' scope.
+         - Fine-grained PAT: under 'Account permissions' (not
+           'Repository permissions'), enable 'Packages: Read'.
+       Regenerate the token with the right permission and re-run."
+  fi
   info "Starting the guided installer ..."
   # Export the key and pass `-e OPEN_LEDGER_LICENSE` by name only, so the value
   # lands in the container's env block and never appears in this process's argv.
