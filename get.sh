@@ -25,8 +25,17 @@ err() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[0;34m[INFO]\033[0m %s\n' "$*"; }
 
 # Detect the host container engine. Echoes "docker" or "podman".
+#
+# If `docker` is the `podman-docker` shim (a wrapper that re-invokes podman),
+# prefer real podman so we resolve podman's socket path instead of the
+# nonexistent /var/run/docker.sock that the shim would have us bind.
 detect_engine() {
   if command -v docker >/dev/null 2>&1; then
+    if docker --version 2>/dev/null | grep -qi podman; then
+      if command -v podman >/dev/null 2>&1; then
+        echo "podman"; return 0
+      fi
+    fi
     echo "docker"; return 0
   fi
   if command -v podman >/dev/null 2>&1; then
