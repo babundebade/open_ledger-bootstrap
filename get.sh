@@ -19,7 +19,7 @@ set -euo pipefail
 
 # Identifier so we can tell from the user's terminal log whether they ran a
 # version of this script that contains a given fix. Bump on every change.
-BOOTSTRAP_REV="2026-05-20-c"
+BOOTSTRAP_REV="2026-05-20-d"
 
 if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
@@ -257,12 +257,16 @@ main() {
   # lands in the container's env block and never appears in this process's argv.
   export OPEN_LEDGER_LICENSE="$license"
   export OPEN_LEDGER_CHANNEL="$CHANNEL"
+  # Redirect stdin from /dev/tty so prompts inside the container reach the
+  # user's terminal even when this script was invoked via `curl ... | bash`
+  # (where our own stdin is the closed curl pipe — podman warns "The input
+  # device is not a TTY" and every prompt hangs).
   exec "$engine" run -it --rm \
     -e OPEN_LEDGER_LICENSE \
     -e OPEN_LEDGER_CHANNEL \
     -v "${INSTALL_DIR}:/host" \
     -v "${socket}:/var/run/docker.sock" \
-    "${INSTALLER_IMAGE}:${CHANNEL}" --install-dir /host "$@"
+    "${INSTALLER_IMAGE}:${CHANNEL}" --install-dir /host "$@" </dev/tty
 }
 
 # Run main unless sourced by a test with execution suppressed.
