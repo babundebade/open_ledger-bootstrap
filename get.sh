@@ -61,17 +61,20 @@ podman_socket_path() {
   podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | sed 's#^unix://##'
 }
 
-# True when Podman's API socket is live.
+# True when Podman's API socket file is actually present on disk. We can't
+# trust `podman info`'s RemoteSocket.Exists field — it sometimes reports the
+# expected path as live when the systemd user unit isn't actually running.
 podman_socket_live() {
-  [ "$(podman info --format '{{.Host.RemoteSocket.Exists}}' 2>/dev/null)" = "true" ]
+  local sock
+  sock="$(podman_socket_path)"
+  [ -n "$sock" ] && [ -S "$sock" ]
 }
 
-# Bring up Podman's API socket. On Linux via systemd socket activation; on
-# macOS by starting the Podman machine. Polls briefly for the socket to come
-# up. Returns non-zero if it cannot be started; the caller surfaces the
-# underlying error message.
-ensure_podman_socket() {
-  if podman_socket_live; then return 0; fi
+# Try to bring up Podman's API socket via the platform's native mechanism
+# (podman machine on macOS, systemd socket activation on Linux). Stderr from
+# the activation command is surfaced to the caller for diagnostics. Returns
+# non-zero if the socket still isn't live afterward.
+try_native_podman_socket() {
   local start_err=""
   if [ "$(uname)" = "Darwin" ]; then
     start_err=$(podman machine start 2>&1 >/dev/null) || { echo "$start_err" >&2; return 1; }
@@ -91,28 +94,63 @@ ensure_podman_socket() {
   return 1
 }
 
+# Launch `podman system service` ourselves on a known path. This is the
+# fallback when systemd user-session activation can't reach the unit — e.g.
+# on a host without an active user systemd session (common over SSH without
+# `loginctl enable-linger`). The service stays up for the life of the bind
+# mount because we don't pass `--time`, and it gets cleaned up when the host
+# is rebooted; for repeat installs we kill any leftover before relaunching.
+PODMAN_FALLBACK_SOCK=""
+start_fallback_podman_socket() {
+  local runtime="${XDG_RUNTIME_DIR:-/tmp}"
+  mkdir -p "$runtime" 2>/dev/null || true
+  PODMAN_FALLBACK_SOCK="${runtime}/open_ledger-podman.sock"
+  rm -f "$PODMAN_FALLBACK_SOCK"
+  # Run detached so the installer container can keep talking to it after
+  # this script `exec`s into `podman run`.
+  setsid podman system service --time=0 "unix://${PODMAN_FALLBACK_SOCK}" \
+    >/dev/null 2>&1 < /dev/null &
+  disown 2>/dev/null || true
+  local i=0
+  while [ "$i" -lt 15 ]; do
+    if [ -S "$PODMAN_FALLBACK_SOCK" ]; then
+      echo "$PODMAN_FALLBACK_SOCK"; return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # Echo the host socket to bind into the installer container for ENGINE.
 resolve_engine_socket() {
   local engine="$1"
   if [ "$engine" = "docker" ]; then
     echo "/var/run/docker.sock"; return 0
   fi
-  if ! ensure_podman_socket; then
-    local cmd="systemctl --user enable --now podman.socket"
-    if [ "$(uname)" = "Darwin" ]; then
-      cmd="podman machine start"
-    elif [ "$(id -u)" -eq 0 ]; then
-      cmd="systemctl enable --now podman.socket"
-    fi
-    err "Podman's API socket is not available and could not be started automatically.
-       See the message above for the underlying error.
-       Run:  ${cmd}
-       Then re-run this installer."
+  if podman_socket_live; then
+    podman_socket_path; return 0
   fi
+  if try_native_podman_socket && podman_socket_live; then
+    podman_socket_path; return 0
+  fi
+  # Native activation didn't materialize a socket on disk. Spin up our own.
   local sock
-  sock="$(podman_socket_path)"
-  [ -n "$sock" ] || err "Could not determine Podman's API socket path."
-  echo "$sock"
+  if sock="$(start_fallback_podman_socket)" && [ -n "$sock" ]; then
+    echo "$sock"; return 0
+  fi
+  local cmd="systemctl --user enable --now podman.socket"
+  if [ "$(uname)" = "Darwin" ]; then
+    cmd="podman machine start"
+  elif [ "$(id -u)" -eq 0 ]; then
+    cmd="systemctl enable --now podman.socket"
+  fi
+  err "Could not bring up Podman's API socket.
+       Tried platform activation and a fallback 'podman system service'.
+       See messages above for the underlying error.
+       You can try:  ${cmd}
+       (over SSH, also run:  loginctl enable-linger \$USER)
+       Then re-run this installer."
 }
 
 # Quick reachability check for the image registry. Catches corporate proxies
