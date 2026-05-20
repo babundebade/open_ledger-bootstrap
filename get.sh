@@ -14,7 +14,17 @@
 #   OPEN_LEDGER_LICENSE_FILE    path to a file containing the license key
 #   OPEN_LEDGER_CHANNEL         release channel (default: stable)
 #   OPEN_LEDGER_DIR             install directory (default: $HOME/open_ledger)
+#   OPEN_LEDGER_DEBUG           when set to 1, enables 'set -x' trace output
 set -euo pipefail
+
+# Identifier so we can tell from the user's terminal log whether they ran a
+# version of this script that contains a given fix. Bump on every change.
+BOOTSTRAP_REV="2026-05-20-c"
+
+if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
+  export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
+  set -x
+fi
 
 GHCR_USER="babundebade"
 INSTALLER_IMAGE="ghcr.io/${GHCR_USER}/open_ledger-installer"
@@ -75,14 +85,17 @@ podman_socket_live() {
 # the activation command is surfaced to the caller for diagnostics. Returns
 # non-zero if the socket still isn't live afterward.
 try_native_podman_socket() {
+  # Capture the activation command's combined stdout+stderr so we can surface
+  # the real failure reason. The previous form `2>&1 >/dev/null` applied the
+  # redirections in the wrong order and produced an empty string.
   local start_err=""
   if [ "$(uname)" = "Darwin" ]; then
-    start_err=$(podman machine start 2>&1 >/dev/null) || { echo "$start_err" >&2; return 1; }
+    start_err=$(podman machine start 2>&1) || { echo "$start_err" >&2; return 1; }
   elif [ "$(id -u)" -eq 0 ]; then
-    start_err=$(systemctl enable --now podman.socket 2>&1 >/dev/null) \
+    start_err=$(systemctl enable --now podman.socket 2>&1) \
       || { echo "$start_err" >&2; return 1; }
   else
-    start_err=$(systemctl --user enable --now podman.socket 2>&1 >/dev/null) \
+    start_err=$(systemctl --user enable --now podman.socket 2>&1) \
       || { echo "$start_err" >&2; return 1; }
   fi
   local i=0
@@ -101,15 +114,24 @@ try_native_podman_socket() {
 # mount because we don't pass `--time`, and it gets cleaned up when the host
 # is rebooted; for repeat installs we kill any leftover before relaunching.
 PODMAN_FALLBACK_SOCK=""
+PODMAN_FALLBACK_LOG=""
 start_fallback_podman_socket() {
-  local runtime="${XDG_RUNTIME_DIR:-/tmp}"
+  # Prefer XDG_RUNTIME_DIR but fall back to /tmp if it's unset or not writable
+  # (rootless podman under sudo, restricted runtimes, etc.).
+  local runtime="${XDG_RUNTIME_DIR:-}"
+  if [ -z "$runtime" ] || ! [ -w "$runtime" ]; then
+    runtime="/tmp"
+  fi
   mkdir -p "$runtime" 2>/dev/null || true
   PODMAN_FALLBACK_SOCK="${runtime}/open_ledger-podman.sock"
+  PODMAN_FALLBACK_LOG="${runtime}/open_ledger-podman-service.log"
   rm -f "$PODMAN_FALLBACK_SOCK"
+  : > "$PODMAN_FALLBACK_LOG" 2>/dev/null || true
   # Run detached so the installer container can keep talking to it after
-  # this script `exec`s into `podman run`.
+  # this script `exec`s into `podman run`. Capture stdout/stderr to a log so
+  # we can show the user why it failed if the socket never appears.
   setsid podman system service --time=0 "unix://${PODMAN_FALLBACK_SOCK}" \
-    >/dev/null 2>&1 < /dev/null &
+    >"$PODMAN_FALLBACK_LOG" 2>&1 < /dev/null &
   disown 2>/dev/null || true
   local i=0
   while [ "$i" -lt 15 ]; do
@@ -145,9 +167,15 @@ resolve_engine_socket() {
   elif [ "$(id -u)" -eq 0 ]; then
     cmd="systemctl enable --now podman.socket"
   fi
+  local svc_log_tail=""
+  if [ -n "${PODMAN_FALLBACK_LOG:-}" ] && [ -s "$PODMAN_FALLBACK_LOG" ]; then
+    svc_log_tail=$(tail -n 5 "$PODMAN_FALLBACK_LOG" 2>/dev/null | sed 's/^/         /')
+  fi
   err "Could not bring up Podman's API socket.
        Tried platform activation and a fallback 'podman system service'.
-       See messages above for the underlying error.
+       See messages above for the underlying error.${svc_log_tail:+
+       Last lines from 'podman system service':
+${svc_log_tail}}
        You can try:  ${cmd}
        (over SSH, also run:  loginctl enable-linger \$USER)
        Then re-run this installer."
@@ -166,6 +194,7 @@ preflight_registry() {
 }
 
 main() {
+  info "Open Ledger bootstrap rev: ${BOOTSTRAP_REV}"
   local engine
   engine="$(detect_engine)"
   if ! "$engine" info >/dev/null 2>&1; then
