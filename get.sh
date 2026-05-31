@@ -19,7 +19,7 @@ set -euo pipefail
 
 # Identifier so we can tell from the user's terminal log whether they ran a
 # version of this script that contains a given fix. Bump on every change.
-BOOTSTRAP_REV="2026-05-20-d"
+BOOTSTRAP_REV="2026-05-31-a"
 
 if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
@@ -261,9 +261,23 @@ main() {
   # user's terminal even when this script was invoked via `curl ... | bash`
   # (where our own stdin is the closed curl pipe — podman warns "The input
   # device is not a TTY" and every prompt hangs).
+  # Mount the host root filesystem at /host_root so the wizard can read host
+  # paths the user types (e.g. an existing sql_app.db) and write deployment
+  # artifacts that the host engine reads back at their real host paths. The
+  # installer translates a host path P to /host_root/P only at the moment it
+  # touches the filesystem; the values it writes into the env/compose files stay
+  # bare host paths for the host daemon. This grants no access beyond what the
+  # mounted engine socket already does (socket access == host root). On macOS /
+  # Windows Docker Desktop, /host_root would be the VM root, not the user's real
+  # filesystem — a known limitation tracked for a path-identity-mount follow-up.
+  # OPEN_LEDGER_INSTALL_DIR_HOST lets the wizard default the data/config dir to a
+  # writable, host-owned location under the install dir.
   exec "$engine" run -it --rm \
     -e OPEN_LEDGER_LICENSE \
     -e OPEN_LEDGER_CHANNEL \
+    -e OPEN_LEDGER_HOST_ROOT=/host_root \
+    -e OPEN_LEDGER_INSTALL_DIR_HOST="${INSTALL_DIR}" \
+    -v /:/host_root \
     -v "${INSTALL_DIR}:/host" \
     -v "${socket}:/var/run/docker.sock" \
     "${INSTALLER_IMAGE}:${CHANNEL}" --install-dir /host "$@" </dev/tty
