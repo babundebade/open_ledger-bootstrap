@@ -13,13 +13,13 @@
 #                                or fine-grained with Account → Packages: Read)
 #   OPEN_LEDGER_LICENSE_FILE    path to a file containing the license key
 #   OPEN_LEDGER_CHANNEL         release channel (default: stable)
-#   OPEN_LEDGER_DIR             install directory (default: $HOME/open_ledger)
+#   OPEN_LEDGER_DIR             install directory (default: current working directory)
 #   OPEN_LEDGER_DEBUG           when set to 1, enables 'set -x' trace output
 set -euo pipefail
 
 # Identifier so we can tell from the user's terminal log whether they ran a
 # version of this script that contains a given fix. Bump on every change.
-BOOTSTRAP_REV="2026-05-31-a"
+BOOTSTRAP_REV="2026-06-01-a"
 
 if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
@@ -29,7 +29,7 @@ fi
 GHCR_USER="babundebade"
 INSTALLER_IMAGE="ghcr.io/${GHCR_USER}/open_ledger-installer"
 CHANNEL="${OPEN_LEDGER_CHANNEL:-stable}"
-INSTALL_DIR="${OPEN_LEDGER_DIR:-${HOME}/open_ledger}"
+INSTALL_DIR="${OPEN_LEDGER_DIR:-${PWD}}"
 
 err() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[0;34m[INFO]\033[0m %s\n' "$*"; }
