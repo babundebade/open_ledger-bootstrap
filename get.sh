@@ -19,7 +19,7 @@ set -euo pipefail
 
 # Identifier so we can tell from the user's terminal log whether they ran a
 # version of this script that contains a given fix. Bump on every change.
-BOOTSTRAP_REV="2026-06-01-a"
+BOOTSTRAP_REV="2026-06-02-a"
 
 if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
@@ -272,7 +272,7 @@ main() {
   # filesystem — a known limitation tracked for a path-identity-mount follow-up.
   # OPEN_LEDGER_INSTALL_DIR_HOST lets the wizard default the data/config dir to a
   # writable, host-owned location under the install dir.
-  exec "$engine" run -it --rm \
+  "$engine" run -it --rm \
     -e OPEN_LEDGER_LICENSE \
     -e OPEN_LEDGER_CHANNEL \
     -e OPEN_LEDGER_HOST_ROOT=/host_root \
@@ -281,6 +281,40 @@ main() {
     -v "${INSTALL_DIR}:/host" \
     -v "${socket}:/var/run/docker.sock" \
     "${INSTALLER_IMAGE}:${CHANNEL}" --install-dir /host "$@" </dev/tty
+
+  # On Linux with systemd: install the update-agent units the installer wrote
+  # to STATE_ROOT and enable the path watcher. The installer container cannot
+  # run systemctl itself. Unit files are written to STATE_ROOT/ by render_artifacts();
+  # on a default install STATE_ROOT is INSTALL_DIR/state.
+  if [ "$(uname)" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+    _unit_svc="open-ledger-update-agent.service"
+    _unit_path="open-ledger-update-agent.path"
+    _unit_src=""
+    for _candidate in \
+        "${INSTALL_DIR}/state/${_unit_svc}" \
+        "${INSTALL_DIR}/${_unit_svc}"; do
+      if [ -f "$_candidate" ]; then
+        _unit_src="$(dirname "$_candidate")"
+        break
+      fi
+    done
+    if [ -z "$_unit_src" ]; then
+      info "Warning: update-agent unit files not found under ${INSTALL_DIR}. Run: sudo systemctl enable --now ${_unit_path} manually after locating them."
+    elif ! sudo -n true 2>/dev/null; then
+      info "Warning: sudo access required to install systemd units. Run manually:"
+      info "  sudo cp ${_unit_src}/${_unit_svc} /etc/systemd/system/"
+      info "  sudo cp ${_unit_src}/${_unit_path} /etc/systemd/system/"
+      info "  sudo systemctl daemon-reload && sudo systemctl enable --now ${_unit_path}"
+    else
+      info "Installing systemd update-agent units ..."
+      sudo cp "${_unit_src}/${_unit_svc}" /etc/systemd/system/
+      sudo cp "${_unit_src}/${_unit_path}" /etc/systemd/system/
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now "${_unit_path}" \
+        && info "Update agent is active and watching for update requests." \
+        || info "Warning: could not enable update agent. Run: sudo systemctl enable --now ${_unit_path}"
+    fi
+  fi
 }
 
 # Run main unless sourced by a test with execution suppressed.
