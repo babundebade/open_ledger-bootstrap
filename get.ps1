@@ -94,12 +94,25 @@ docker run -it --rm `
     -v "${InstallDir}:/host" `
     -v "/var/run/docker.sock:/var/run/docker.sock" `
     "${InstallerImage}:${Channel}" --install-dir /host @args
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$_dockerExitCode = $LASTEXITCODE
 
 # Post-install: register Windows Task Scheduler task and stamp update-agent.json.
 # Skip for --update and --uninstall runs (those are handled by the installer container).
 $_isUpdate    = $args -contains "--update"
 $_isUninstall = $args -contains "--uninstall"
+
+# Uninstall: remove the scheduled task even if the installer container exited non-zero,
+# so a partially-failed uninstall does not leave the update agent running.
+if ($_isUninstall) {
+    $taskName = "OpenLedger-UpdateAgent"
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Info "Removing scheduled update agent task ..."
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Info "Update agent task removed."
+    }
+}
+
+if ($_dockerExitCode -ne 0) { exit $_dockerExitCode }
 
 if (-not $_isUpdate -and -not $_isUninstall) {
     # Read state_root and env_file from install-state.json written by the wizard.
@@ -122,8 +135,9 @@ if (-not $_isUpdate -and -not $_isUninstall) {
     if (Test-Path $taskXml) {
         Info "Registering update agent scheduled task ..."
         try {
-            $xmlContent = Get-Content $taskXml -Raw
-            Register-ScheduledTask -TaskName $taskName -Xml $xmlContent -Force | Out-Null
+            $xmlContent  = Get-Content $taskXml -Raw
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            Register-ScheduledTask -TaskName $taskName -Xml $xmlContent -User $currentUser -Force | Out-Null
             Start-ScheduledTask -TaskName $taskName
             Info "Update agent registered. It will run every 12 hours and at each boot."
         } catch {
@@ -148,14 +162,4 @@ if (-not $_isUpdate -and -not $_isUninstall) {
     Info "Open Ledger is ready. Management commands:"
     Info "  Update:    `$env:OPEN_LEDGER_DIR=`"$InstallDir`"; & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.ps1'))) -- --update"
     Info "  Uninstall: `$env:OPEN_LEDGER_DIR=`"$InstallDir`"; & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.ps1'))) -- --uninstall"
-}
-
-# Uninstall: remove the scheduled task after the installer container has cleaned up the stack.
-if ($_isUninstall) {
-    $taskName = "OpenLedger-UpdateAgent"
-    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-        Info "Removing scheduled update agent task ..."
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-        Info "Update agent task removed."
-    }
 }
