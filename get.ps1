@@ -86,10 +86,76 @@ Info "Starting the guided installer ..."
 # by name only, so the value is never part of the docker argv.
 $env:OPEN_LEDGER_LICENSE = $License
 $env:OPEN_LEDGER_CHANNEL = $Channel
+$env:OPEN_LEDGER_INSTALL_DIR_HOST = $InstallDir
 docker run -it --rm `
     -e OPEN_LEDGER_LICENSE `
     -e OPEN_LEDGER_CHANNEL `
+    -e OPEN_LEDGER_INSTALL_DIR_HOST `
     -v "${InstallDir}:/host" `
     -v "/var/run/docker.sock:/var/run/docker.sock" `
     "${InstallerImage}:${Channel}" --install-dir /host @args
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Post-install: register Windows Task Scheduler task and stamp update-agent.json.
+# Skip for --update and --uninstall runs (those are handled by the installer container).
+$_isUpdate    = $args -contains "--update"
+$_isUninstall = $args -contains "--uninstall"
+
+if (-not $_isUpdate -and -not $_isUninstall) {
+    # Read state_root and env_file from install-state.json written by the wizard.
+    $stateFile = Join-Path $InstallDir "install-state.json"
+    $stateRoot = $null
+    $envFile   = $null
+    if (Test-Path $stateFile) {
+        try {
+            $s = Get-Content $stateFile -Raw | ConvertFrom-Json
+            $stateRoot = $s.answers.state_root
+            $envFile   = $s.answers.env_file
+        } catch {}
+    }
+    if (-not $stateRoot) { $stateRoot = Join-Path $InstallDir "state" }
+    if (-not $envFile)   { $envFile   = Join-Path $stateRoot "env\open_ledger.env" }
+
+    # Register Task Scheduler task from the XML the installer rendered.
+    $taskXml  = Join-Path $stateRoot "open-ledger-update-agent-task.xml"
+    $taskName = "OpenLedger-UpdateAgent"
+    if (Test-Path $taskXml) {
+        Info "Registering update agent scheduled task ..."
+        try {
+            $xmlContent = Get-Content $taskXml -Raw
+            Register-ScheduledTask -TaskName $taskName -Xml $xmlContent -Force | Out-Null
+            Start-ScheduledTask -TaskName $taskName
+            Info "Update agent registered. It will run every 12 hours and at each boot."
+        } catch {
+            Info "Warning: could not register scheduled task: $_"
+            Info "  To register manually, run: Register-ScheduledTask -TaskName '$taskName' -Xml (Get-Content '$taskXml' -Raw) -Force"
+        }
+    } else {
+        Info "Warning: task XML not found at $taskXml — update agent not registered."
+    }
+
+    # Stamp update-agent.json so the backend knows the agent is active on this host.
+    $controlDir = Join-Path $stateRoot "control"
+    New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
+    @{
+        mode        = "task-scheduler"
+        install_dir = $InstallDir
+        state_root  = $stateRoot
+        env_file    = $envFile
+    } | ConvertTo-Json | Set-Content (Join-Path $controlDir "update-agent.json") -Encoding UTF8
+
+    Info ""
+    Info "Open Ledger is ready. Management commands:"
+    Info "  Update:    `$env:OPEN_LEDGER_DIR=`"$InstallDir`"; & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.ps1'))) -- --update"
+    Info "  Uninstall: `$env:OPEN_LEDGER_DIR=`"$InstallDir`"; & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.ps1'))) -- --uninstall"
+}
+
+# Uninstall: remove the scheduled task after the installer container has cleaned up the stack.
+if ($_isUninstall) {
+    $taskName = "OpenLedger-UpdateAgent"
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Info "Removing scheduled update agent task ..."
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Info "Update agent task removed."
+    }
+}

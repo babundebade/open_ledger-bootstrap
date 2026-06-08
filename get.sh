@@ -19,7 +19,7 @@ set -euo pipefail
 
 # Identifier so we can tell from the user's terminal log whether they ran a
 # version of this script that contains a given fix. Bump on every change.
-BOOTSTRAP_REV="2026-06-02-a"
+BOOTSTRAP_REV="2026-06-01-a"
 
 if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
@@ -33,6 +33,16 @@ INSTALL_DIR="${OPEN_LEDGER_DIR:-${PWD}}"
 
 err() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[0;34m[INFO]\033[0m %s\n' "$*"; }
+
+_args_contain_uninstall() {
+  for _a in "$@"; do [ "$_a" = "--uninstall" ] && return 0; done
+  return 1
+}
+
+_args_contain_update() {
+  for _a in "$@"; do [ "$_a" = "--update" ] && return 0; done
+  return 1
+}
 
 # Detect the host container engine. Echoes "docker" or "podman".
 #
@@ -282,18 +292,57 @@ main() {
     -v "${socket}:/var/run/docker.sock" \
     "${INSTALLER_IMAGE}:${CHANNEL}" --install-dir /host "$@" </dev/tty
 
+  # If this was an uninstall on Linux, disable and remove the systemd units (R21).
+  if _args_contain_uninstall "$@" && [ "$(uname)" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+    _unit_svc="open-ledger-update-agent.service"
+    _unit_path="open-ledger-update-agent.path"
+    if sudo -n true 2>/dev/null; then
+      info "Removing systemd update-agent units ..."
+      sudo systemctl disable --now "$_unit_path" 2>/dev/null || true
+      sudo systemctl disable --now "$_unit_svc" 2>/dev/null || true
+      sudo rm -f "/etc/systemd/system/${_unit_svc}" "/etc/systemd/system/${_unit_path}"
+      sudo systemctl daemon-reload
+      info "Update agent units removed."
+    else
+      info "Warning: sudo required to remove systemd units. Run manually:"
+      info "  sudo systemctl disable --now ${_unit_path} ${_unit_svc}"
+      info "  sudo rm -f /etc/systemd/system/${_unit_svc} /etc/systemd/system/${_unit_path}"
+      info "  sudo systemctl daemon-reload"
+    fi
+  fi
+
+  # Print management commands with pre-filled OPEN_LEDGER_DIR after a fresh install (R23).
+  if ! _args_contain_uninstall "$@" && ! _args_contain_update "$@"; then
+    info "Management commands for this installation:"
+    info "  Update:    OPEN_LEDGER_DIR=\"${INSTALL_DIR}\" bash <(curl -fsSL https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.sh) --update"
+    info "  Uninstall: OPEN_LEDGER_DIR=\"${INSTALL_DIR}\" bash <(curl -fsSL https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.sh) --uninstall"
+  fi
+
   # On Linux with systemd: install the update-agent units the installer wrote
   # to STATE_ROOT and enable the path watcher. The installer container cannot
   # run systemctl itself. Unit files are written to STATE_ROOT/ by render_artifacts();
   # on a default install STATE_ROOT is INSTALL_DIR/state.
-  if [ "$(uname)" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+  if ! _args_contain_uninstall "$@" && [ "$(uname)" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
     _unit_svc="open-ledger-update-agent.service"
     _unit_path="open-ledger-update-agent.path"
     _unit_src=""
+    # Try to read actual state_root from install_state.json (R3).
+    _state_from_json=""
+    if [ -f "${INSTALL_DIR}/install_state.json" ] && command -v python3 >/dev/null 2>&1; then
+      _state_from_json=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('${INSTALL_DIR}/install_state.json', encoding='utf-8'))
+    print(d.get('answers', {}).get('state_root', ''))
+except Exception:
+    pass
+" 2>/dev/null || true)
+    fi
     for _candidate in \
+        "${_state_from_json}/${_unit_svc}" \
         "${INSTALL_DIR}/state/${_unit_svc}" \
         "${INSTALL_DIR}/${_unit_svc}"; do
-      if [ -f "$_candidate" ]; then
+      if [ -n "${_candidate%/*}" ] && [ -f "$_candidate" ]; then
         _unit_src="$(dirname "$_candidate")"
         break
       fi
@@ -313,6 +362,12 @@ main() {
       sudo systemctl enable --now "${_unit_path}" \
         && info "Update agent is active and watching for update requests." \
         || info "Warning: could not enable update agent. Run: sudo systemctl enable --now ${_unit_path}"
+    fi
+
+    # Warn about missing skopeo after install on Linux (R17).
+    if ! command -v skopeo >/dev/null 2>&1; then
+      info "Note: 'skopeo' is required for in-app update checks and is not installed."
+      info "  Install it with: sudo apt install skopeo"
     fi
   fi
 }
