@@ -30,7 +30,8 @@ if ($LASTEXITCODE -ne 0) { Fail "Docker Desktop is installed but not running. St
 try {
     Invoke-WebRequest -Uri "https://ghcr.io/v2/" -Method Head -TimeoutSec 10 -UseBasicParsing *> $null
 } catch {
-    if ($_.Exception.Response.StatusCode.value__ -ne 401) {
+    $code = $_.Exception.Response.StatusCode.value__
+    if ($code -ne 401 -and $code -ne 405) {
         Fail "Could not reach ghcr.io. Check your internet connection or proxy settings."
     }
 }
