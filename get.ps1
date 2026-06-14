@@ -87,10 +87,13 @@ Info "Starting the guided installer ..."
 $env:OPEN_LEDGER_LICENSE = $License
 $env:OPEN_LEDGER_CHANNEL = $Channel
 $env:OPEN_LEDGER_INSTALL_DIR_HOST = $InstallDir
+# Forward-slash form used inside the Linux container to translate host paths.
+$env:OPEN_LEDGER_WIN_INSTALL_DIR = $InstallDir.Replace("\", "/")
 docker run -it --rm `
     -e OPEN_LEDGER_LICENSE `
     -e OPEN_LEDGER_CHANNEL `
     -e OPEN_LEDGER_INSTALL_DIR_HOST `
+    -e OPEN_LEDGER_WIN_INSTALL_DIR `
     -v "${InstallDir}:/host" `
     -v "/var/run/docker.sock:/var/run/docker.sock" `
     "${InstallerImage}:${Channel}" --install-dir /host @args
