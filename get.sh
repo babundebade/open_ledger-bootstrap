@@ -19,7 +19,7 @@ set -euo pipefail
 
 # Identifier so we can tell from the user's terminal log whether they ran a
 # version of this script that contains a given fix. Bump on every change.
-BOOTSTRAP_REV="2026-06-01-a"
+BOOTSTRAP_REV="2026-07-04-a"
 
 if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
@@ -326,13 +326,13 @@ main() {
     _unit_svc="open-ledger-update-agent.service"
     _unit_path="open-ledger-update-agent.path"
     _unit_src=""
-    # Try to read actual state_root from install_state.json (R3).
+    # Try to read actual state_root from install-state.json (R3).
     _state_from_json=""
-    if [ -f "${INSTALL_DIR}/install_state.json" ] && command -v python3 >/dev/null 2>&1; then
+    if [ -f "${INSTALL_DIR}/install-state.json" ] && command -v python3 >/dev/null 2>&1; then
       _state_from_json=$(python3 -c "
 import json, sys
 try:
-    d = json.load(open('${INSTALL_DIR}/install_state.json', encoding='utf-8'))
+    d = json.load(open('${INSTALL_DIR}/install-state.json', encoding='utf-8'))
     print(d.get('answers', {}).get('state_root', ''))
 except Exception:
     pass
@@ -353,12 +353,15 @@ except Exception:
       info "Warning: sudo access required to install systemd units. Run manually:"
       info "  sudo cp ${_unit_src}/${_unit_svc} /etc/systemd/system/"
       info "  sudo cp ${_unit_src}/${_unit_path} /etc/systemd/system/"
-      info "  sudo systemctl daemon-reload && sudo systemctl enable --now ${_unit_path}"
+      info "  sudo systemctl daemon-reload"
+      info "  sudo systemctl reset-failed \"${_unit_svc}\" \"${_unit_path}\" 2>/dev/null || true"
+      info "  sudo systemctl enable --now ${_unit_path}"
     else
       info "Installing systemd update-agent units ..."
       sudo cp "${_unit_src}/${_unit_svc}" /etc/systemd/system/
       sudo cp "${_unit_src}/${_unit_path}" /etc/systemd/system/
       sudo systemctl daemon-reload
+      sudo systemctl reset-failed "${_unit_svc}" "${_unit_path}" 2>/dev/null || true
       sudo systemctl enable --now "${_unit_path}" \
         && info "Update agent is active and watching for update requests." \
         || info "Warning: could not enable update agent. Run: sudo systemctl enable --now ${_unit_path}"
