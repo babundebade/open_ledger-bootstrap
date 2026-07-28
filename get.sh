@@ -282,6 +282,16 @@ main() {
   # filesystem — a known limitation tracked for a path-identity-mount follow-up.
   # OPEN_LEDGER_INSTALL_DIR_HOST lets the wizard default the data/config dir to a
   # writable, host-owned location under the install dir.
+  # On Linux, join the host's network namespace so the installer's health
+  # check (which hits http://localhost:PORT for "local" access mode) reaches
+  # the app's port published on the host's own loopback. Without this the
+  # installer has its own loopback and the health check always times out even
+  # though the app is healthy. Not available on macOS/Windows Docker Desktop
+  # (podman machine / Docker Desktop run in a VM), so it's Linux-only.
+  network_args=()
+  if [ "$(uname)" = "Linux" ]; then
+    network_args=(--network host)
+  fi
   "$engine" run -it --rm \
     -e OPEN_LEDGER_LICENSE \
     -e OPEN_LEDGER_CHANNEL \
@@ -290,6 +300,7 @@ main() {
     -v /:/host_root \
     -v "${INSTALL_DIR}:/host" \
     -v "${socket}:/var/run/docker.sock" \
+    "${network_args[@]}" \
     "${INSTALLER_IMAGE}:${CHANNEL}" --install-dir /host "$@" </dev/tty
 
   # If this was an uninstall on Linux, disable and remove the systemd units (R21).
