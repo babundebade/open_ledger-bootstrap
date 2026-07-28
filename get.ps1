@@ -144,19 +144,49 @@ Regenerate the token with the right permission and re-run.
         if (-not $envFile)   { $envFile   = Join-Path $stateRoot "env\open_ledger.env" }
 
         # Register Task Scheduler task from the XML the installer rendered.
+        # Register-ScheduledTask always needs an elevated token to write into the
+        # Task Scheduler root library, regardless of the task's own RunLevel/LogonType
+        # (those only govern the task at run time, not at registration time). This
+        # script runs in the user's normal, non-elevated session, so the registration
+        # is delegated to a short-lived elevated child process (one UAC prompt) instead
+        # of running the whole installer elevated.
         $taskXml  = Join-Path $stateRoot "open-ledger-update-agent-task.xml"
         $taskName = "OpenLedger-UpdateAgent"
         if (Test-Path $taskXml) {
-            Info "Registering update agent scheduled task ..."
+            Info "Registering update agent scheduled task (an administrator approval prompt will appear) ..."
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            $manualCmd = "Register-ScheduledTask -TaskName '$taskName' -Xml (Get-Content '$taskXml' -Raw) -User '$currentUser' -Force"
+            $escTaskXml  = $taskXml.Replace("'", "''")
+            $escTaskName = $taskName.Replace("'", "''")
+            $escUser     = $currentUser.Replace("'", "''")
+            $registerScript = @"
+`$ErrorActionPreference = 'Stop'
+try {
+    `$xmlContent = Get-Content '$escTaskXml' -Raw
+    Register-ScheduledTask -TaskName '$escTaskName' -Xml `$xmlContent -User '$escUser' -Force | Out-Null
+    Start-ScheduledTask -TaskName '$escTaskName'
+    exit 0
+} catch {
+    exit 1
+}
+"@
+            $registerScriptPath = Join-Path $env:TEMP "open-ledger-register-task-$PID.ps1"
+            Set-Content -Path $registerScriptPath -Value $registerScript -Encoding UTF8
             try {
-                $xmlContent  = Get-Content $taskXml -Raw
-                $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-                Register-ScheduledTask -TaskName $taskName -Xml $xmlContent -User $currentUser -Force | Out-Null
-                Start-ScheduledTask -TaskName $taskName
-                Info "Update agent registered. It will run every 12 hours and at each boot."
+                $proc = Start-Process powershell.exe -ArgumentList @(
+                    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $registerScriptPath
+                ) -Verb RunAs -Wait -PassThru
+                if ($proc.ExitCode -eq 0) {
+                    Info "Update agent registered. It will run every 12 hours and at each boot."
+                } else {
+                    Info "Warning: could not register scheduled task (exit code $($proc.ExitCode))."
+                    Info "  To register manually in an elevated PowerShell, run: $manualCmd"
+                }
             } catch {
-                Info "Warning: could not register scheduled task: $_"
-                Info "  To register manually, run: Register-ScheduledTask -TaskName '$taskName' -Xml (Get-Content '$taskXml' -Raw) -Force"
+                Info "Warning: could not launch elevated registration: $_"
+                Info "  To register manually in an elevated PowerShell, run: $manualCmd"
+            } finally {
+                Remove-Item $registerScriptPath -ErrorAction SilentlyContinue
             }
         } else {
             Info "Warning: task XML not found at $taskXml — update agent not registered."
