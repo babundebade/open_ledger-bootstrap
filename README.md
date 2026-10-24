@@ -61,7 +61,8 @@ The installer is interactive. Expect these questions:
 4. **Domain / hostname** *(remote only)* — the domain for `caddy`, or the server
    IP/hostname for `http`.
 5. **Data location** — directory under which the database, env file, logs, and
-   backups live (default: `~/open_ledger`).
+   backups live (default: `state/` inside the install directory, i.e.
+   `~/open_ledger/state`; fixed on Windows).
 6. **FinTS** — whether to enable bank synchronisation. If yes, asks for a FinTS
    *product ID* and *version*; these come from registering with your bank's FinTS
    programme — decline if you haven't done that yet, you can enable it later via
@@ -85,10 +86,22 @@ Open Ledger is installed. Open: http://localhost:10000
 
 ## Update / uninstall
 
+Linux / macOS:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.sh | bash -s -- --update
 curl -fsSL https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.sh | bash -s -- --uninstall
 ```
+
+Windows (PowerShell):
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.ps1'))) -- --update
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/babundebade/open_ledger-bootstrap/main/get.ps1'))) -- --uninstall
+```
+
+Both find your install in `~/open_ledger` (`$HOME\open_ledger` on Windows). If you
+installed somewhere else, set `OPEN_LEDGER_DIR` to that directory first.
 
 Updates snapshot the SQLite database to `<data-location>/backups/` before pulling
 new images. Uninstall asks whether to keep or permanently delete your data.
@@ -113,7 +126,7 @@ export OPEN_LEDGER_LICENSE_FILE=~/.config/open_ledger/license
 | `OPEN_LEDGER_LICENSE` | License key (PAT) | — |
 | `OPEN_LEDGER_LICENSE_FILE` | Path to a file containing the key | — |
 | `OPEN_LEDGER_CHANNEL` | Release channel | `stable` |
-| `OPEN_LEDGER_DIR` | Install directory | `~/open_ledger` |
+| `OPEN_LEDGER_DIR` | Install directory | `~/open_ledger` (or the current directory if it already contains an `install-state.json`) |
 
 ## What these scripts do
 

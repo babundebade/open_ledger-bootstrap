@@ -13,13 +13,14 @@
 #                                or fine-grained with Account → Packages: Read)
 #   OPEN_LEDGER_LICENSE_FILE    path to a file containing the license key
 #   OPEN_LEDGER_CHANNEL         release channel (default: stable)
-#   OPEN_LEDGER_DIR             install directory (default: current working directory)
+#   OPEN_LEDGER_DIR             install directory (default: $HOME/open_ledger, or the current
+#                                directory when it already holds an install-state.json)
 #   OPEN_LEDGER_DEBUG           when set to 1, enables 'set -x' trace output
 set -euo pipefail
 
 # Identifier so we can tell from the user's terminal log whether they ran a
 # version of this script that contains a given fix. Bump on every change.
-BOOTSTRAP_REV="2026-07-04-a"
+BOOTSTRAP_REV="2026-10-24-a"
 
 if [ "${OPEN_LEDGER_DEBUG:-0}" = "1" ]; then
   export PS4='+ [${BASH_SOURCE##*/}:${LINENO}] '
@@ -29,7 +30,14 @@ fi
 GHCR_USER="babundebade"
 INSTALLER_IMAGE="ghcr.io/${GHCR_USER}/open_ledger-installer"
 CHANNEL="${OPEN_LEDGER_CHANNEL:-stable}"
-INSTALL_DIR="${OPEN_LEDGER_DIR:-${PWD}}"
+# Earlier versions defaulted to the current directory; keep finding those installs.
+if [ -n "${OPEN_LEDGER_DIR:-}" ]; then
+  INSTALL_DIR="$OPEN_LEDGER_DIR"
+elif [ -f "${PWD}/install-state.json" ]; then
+  INSTALL_DIR="$PWD"
+else
+  INSTALL_DIR="${HOME}/open_ledger"
+fi
 
 err() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[0;34m[INFO]\033[0m %s\n' "$*"; }
@@ -291,6 +299,11 @@ main() {
   network_args=()
   if [ "$(uname)" = "Linux" ]; then
     network_args=(--network host)
+    # With SELinux enforcing, the container may not read the host root or the
+    # engine socket unless labelling is disabled for this one container.
+    if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
+      network_args+=(--security-opt label=disable)
+    fi
   fi
   "$engine" run -it --rm \
     -e OPEN_LEDGER_LICENSE \
@@ -300,7 +313,7 @@ main() {
     -v /:/host_root \
     -v "${INSTALL_DIR}:/host" \
     -v "${socket}:/var/run/docker.sock" \
-    "${network_args[@]}" \
+    ${network_args[@]+"${network_args[@]}"} \
     "${INSTALLER_IMAGE}:${CHANNEL}" --install-dir /host "$@" </dev/tty
 
   # If this was an uninstall on Linux, disable and remove the systemd units (R21).

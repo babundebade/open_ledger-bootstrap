@@ -19,6 +19,8 @@ function Info($msg) { Write-Host "[INFO] $msg" -ForegroundColor Blue }
 function Fail($msg) { throw $msg }
 
 function Install-OpenLedger([string[]]$ScriptArgs = @()) {
+    # `& ([scriptblock]::Create(...)) -- --update` may hand the bare `--` through.
+    $ScriptArgs = @($ScriptArgs | Where-Object { $_ -ne "--" })
     $GhcrUser = "babundebade"
     $InstallerImage = "ghcr.io/$GhcrUser/open_ledger-installer"
     $Channel = if ($env:OPEN_LEDGER_CHANNEL) { $env:OPEN_LEDGER_CHANNEL } else { "stable" }
